@@ -220,9 +220,30 @@ class Parser:
     def factor(self):
         res = ParseResult()
         tok = self.current_tok
-        if tok.type in (TOKEN_INT, TOKEN_FLOAT):
+
+        if tok.type in (TOKEN_PLUS, TOKEN_MINUS):
+            res.register(self.advance())
+            factor = res.register(self.factor())
+            if res.error: return res
+            return res.success(UnaryOpNode(tok,factor))
+
+        elif tok.type in (TOKEN_INT, TOKEN_FLOAT):
             res.register(self.advance())
             return res.success(NumberNode(tok))
+
+        elif tok.type == TOKEN_LPAREN:
+            res.register(self.advance())
+            expr = res.register(self.expr())
+            if res.error: return res
+            if self.current_tok.type == TOKEN_RPAREN:
+                res.register(self.advance())
+                return res.success(expr)
+            else:
+                return res.failure(InvalidSyntaxError(
+                    "Expected ')'",
+                    self.current_tok.pos_start,
+                    self.current_tok.pos_end
+                ))
         
         return res.failure(InvalidSyntaxError(
             "Expected int or float",
