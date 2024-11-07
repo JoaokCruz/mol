@@ -1,55 +1,8 @@
-from strings_with_arrows import *
+from error_handling import *
 
 # DIGITS
 
 DIGITS = '0123456789'
-
-# ERRORS
-
-class Error:
-    def __init__(self, pos_start, pos_end, error_name, details):
-        self.pos_start = pos_start
-        self.pos_end = pos_end
-        self.error_name = error_name
-        self.details = details
-
-    def as_string(self):
-        result = f'{self.error_name}: {self.details}\n'
-        result += f'File {self.pos_start.fn}, line {self.pos_start.line + 1}'
-        result += '\n\n' + string_with_arrows(self.pos_start.ftxt, self.pos_start, self.pos_end)
-        return result
-
-class IllegalCharError(Error):
-    def __init__(self, details, pos_start, pos_end):
-        super().__init__(pos_start, pos_end, "Illegal character error", details)
-
-class InvalidSyntaxError(Error):
-    def __init__(self, details, pos_start, pos_end):
-        super().__init__(pos_start, pos_end, "Invalid Syntax", details)
-
-class RTError(Error):
-    def __init__(self, details, pos_start, pos_end, context):
-        super().__init__(pos_start, pos_end, "Runtime Error", details)
-        self.context = context
-
-    def as_string(self):
-        result = self.generate_traceback()
-        result += f'{self.error_name}: {self.details}\n'
-        result += '\n\n' + string_with_arrows(self.pos_start.ftxt, self.pos_start, self.pos_end)
-        return result
-
-    def generate_traceback(self):
-        result = ''
-        pos = self.pos_start
-        ctx = self.context
-
-        while ctx:
-            result = f'  File {pos.fn}, line {str(pos.line + 1)}, in {ctx.display_name}\n' + result
-            pos = ctx.parent_entry_pos
-            ctx = ctx.parent
-
-        return 'Traceback (most recent call last):\n' + result
-    
 
 # position
 
@@ -82,9 +35,11 @@ TOKEN_PLUS = 'PLUS'
 TOKEN_MINUS = 'MINUS'
 TOKEN_MUL = 'MUL'
 TOKEN_DIV = 'DIV'
+TOKEN_POW = 'POW'
 TOKEN_LPAREN = 'LPAREN'
 TOKEN_RPAREN = 'RPAREN'
 TOKEN_EOF = 'EOF'
+
 
 
 class Token:
@@ -136,6 +91,9 @@ class Lexer:
                 self.advance()
             elif self.current_char == '/':
                 tokens.append(Token(TOKEN_DIV, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == '^':
+                tokens.append(Token(TOKEN_POW, pos_start=self.pos))
                 self.advance()
             elif self.current_char == '(':
                 tokens.append(Token(TOKEN_LPAREN, pos_start=self.pos))
@@ -250,17 +208,11 @@ class Parser:
         
         return res
 
-    def factor(self):
+    def atom(self):
         res = ParseResult()
         tok = self.current_tok
 
-        if tok.type in (TOKEN_PLUS, TOKEN_MINUS):
-            res.register(self.advance())
-            factor = res.register(self.factor())
-            if res.error: return res
-            return res.success(UnaryOpNode(tok,factor))
-
-        elif tok.type in (TOKEN_INT, TOKEN_FLOAT):
+        if tok.type in (TOKEN_INT, TOKEN_FLOAT):
             res.register(self.advance())
             return res.success(NumberNode(tok))
 
@@ -279,10 +231,26 @@ class Parser:
                 ))
         
         return res.failure(InvalidSyntaxError(
-            "Expected int or float",
+            "Expected int, float, '+', '-', or '('",
             tok.pos_start, 
             tok.pos_end,
         ))
+
+    def power(self):
+        return self.bin_op(self.atom, (TOKEN_POW, ), self.factor)
+
+    def factor(self):
+        res = ParseResult()
+        tok = self.current_tok
+
+        if tok.type in (TOKEN_PLUS, TOKEN_MINUS):
+            res.register(self.advance())
+            factor = res.register(self.factor())
+            if res.error: return res
+            return res.success(UnaryOpNode(tok,factor))
+
+
+        return self.power()
 
     def term(self):
         return self.bin_op(self.factor, (TOKEN_MUL, TOKEN_DIV))
@@ -290,16 +258,20 @@ class Parser:
     def expr(self):
         return self.bin_op(self.term, (TOKEN_PLUS, TOKEN_MINUS))
 
-    def bin_op(self, func, ops):
+    def bin_op(self, func_a, ops, func_b=None):
+        if func_b == None:
+            func_b = func_a
+
+        
         res = ParseResult()
-        left = res.register(func())
+        left = res.register(func_a())
 
         if res.error: return res
 
         while self.current_tok.type in ops:
             op_tok = self.current_tok
             res.register(self.advance())
-            right = res.register(func())
+            right = res.register(func_b())
             if res.error: return res
 
             left = BinOpNode(left, op_tok, right)
@@ -361,7 +333,11 @@ class Number:
                 )
             
             return Number(self.value / other.value).set_context(self.context), None
-        
+    
+    def powed_by(self , other):
+        if isinstance(other, Number):
+            return Number(self.value ** other.value).set_context(self.context), None
+
     def __repr__(self):
         return str(self.value)
 
@@ -401,6 +377,8 @@ class Interpreter:
             result, error = left.multed_to(right)
         elif node.op_tok.type == TOKEN_DIV:
             result, error = left.dived_to(right)
+        elif node.op_tok.type == TOKEN_POW:
+            result, error = left.powed_by(right)
 
         if error:
             return res.failure(error)
