@@ -58,7 +58,11 @@ KEYWORKS = [
     'VAR',
     'AND',
     'OR',
-    'NOT'
+    'NOT',
+    'IF',
+    'THEN',
+    'ELIF',
+    'ELSE',
 ]
 
 class Token:
@@ -265,6 +269,14 @@ class UnaryOpNode:
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
 
+class IfNode:
+    def __init__(self, cases, else_case):
+        self.cases = cases
+        self.else_case = else_case
+
+        self.pos_start = self.cases[0][0].pos_start
+        self.pos_end = (self.else_case or self.cases[len(self.cases) - 1][0]).pos_end
+
 class ParseResult:
     def __init__(self):
         self.error = None
@@ -343,11 +355,79 @@ class Parser:
                     self.current_tok.pos_end
                 ))
         
+        if self.current_tok.matches(TOKEN_KEYWORK, 'IF'):
+            if_expr = res.register(self.if_expr())
+            if res.error: return res
+            return res.success(if_expr)
+        
         return res.failure(InvalidSyntaxError(
             "Expected int, float, identifier, '+', '-', or '('",
             tok.pos_start, 
             tok.pos_end,
         ))
+
+    def if_expr(self):
+        res = ParseResult()
+        cases = []
+        else_case = None
+
+        if not self.current_tok.matches(TOKEN_KEYWORK, 'IF'):
+            return res.failure(InvalidSyntaxError(
+                f"Expected 'IF'",
+                self.current_tok.pos_start, 
+                self.current_tok.pos_end
+            ))
+
+        res.register_advancement()
+        self.advance()
+
+        condition = res.register(self.expr())
+        if res.error: return res
+
+        if not self.current_tok.matches(TOKEN_KEYWORK, 'THEN'):
+            return res.failure(InvalidSyntaxError(
+                f"Expected 'THEN'",
+                self.current_tok.pos_start,
+                self.current_tok.pos_end
+            ))
+
+        res.register_advancement()
+        self.advance()
+
+        expr = res.register(self.expr())
+        if res.error: return res
+        cases.append((condition, expr))
+
+        while self.current_tok.matches(TOKEN_KEYWORK, 'ELIF'):
+            res.register_advancement()
+            self.advance()
+
+            condition = res.register(self.expr())
+            if res.error: return res
+
+            if not self.current_tok.matches(TOKEN_KEYWORK, 'THEN'):
+
+                return res.failure(InvalidSyntaxError(
+                    f"Expected 'THEN'",
+                    self.current_tok.pos_start, 
+                    self.current_tok.pos_end
+                ))
+
+            res.register_advancement()
+            self.advance()
+
+            expr = res.register(self.expr())
+            if res.error: return res
+            cases.append((condition, expr))
+
+        if self.current_tok.matches(TOKEN_KEYWORK, 'ELSE'):
+            res.register_advancement()
+            self.advance()
+
+            else_case = res.register(self.expr())
+            if res.error: return res
+
+        return res.success(IfNode(cases, else_case))
 
     def power(self):
         return self.bin_op(self.atom, (TOKEN_POW, ), self.factor)
@@ -560,6 +640,9 @@ class Number:
         copy.set_pos(self.pos_start, self.pos_end)
         copy.set_context(self.context)
         return copy
+    
+    def is_true(self):
+        return self.value != 0
 
     def __repr__(self):
         return str(self.value)
@@ -691,6 +774,24 @@ class Interpreter:
         else:
             return res.success(number.set_pos(node.pos_start, node.pos_end))
 
+    def visit_IfNode(self, node, context):
+        res = RTResult()
+
+        for condition, expr in node.cases:
+            condition_value = res.register(self.visit(condition, context))
+            if res.error: return res
+
+            if condition_value.is_true():
+                expr_value = res.register(self.visit(expr, context))
+                if res.error: return res
+                return res.success(expr_value)
+
+        if node.else_case:
+            else_value = res.register(self.visit(node.else_case, context))
+            if res.error: return res
+            return res.success(else_value)
+
+        return res.success(None)
 
 global_symbol_table = SymbolTable()
 global_symbol_table.set("NULL", Number(0))
@@ -705,7 +806,7 @@ def run(text, fn):
 
     parser = Parser(tokens)
     ast = parser.parse()
-    print(f'Node: {ast.node}')
+    # print(f'Node: {ast.node}')
     if ast.error: return None, ast.error
 
     interpreter = Interpreter()
